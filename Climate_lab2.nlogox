@@ -1,304 +1,323 @@
 <?xml version="1.0" encoding="utf-8"?>
 <model version="NetLogo 7.0.4" snapToGrid="true">
-  <code><![CDATA[turtles-own
-  [ sick?                ;; if true, the turtle is infectious
-    remaining-immunity   ;; how many weeks of immunity the turtle has left
-    sick-time            ;; how long, in weeks, the turtle has been infectious
-    age ]                ;; how many weeks old the turtle is
+  <code><![CDATA[globals [
+  sky-top      ;; y coordinate of top row of sky
+  earth-top    ;; y coordinate of top row of earth
+  temperature  ;; overall temperature
+  sun-angle    ;; (нове) поточний кут нових променів
+]
 
-globals
-  [ %infected            ;; what % of the population is infectious
-    %immune              ;; what % of the population is immune
-    lifespan             ;; the lifespan of a turtle
-    chance-reproduce     ;; the probability of a turtle generating an offspring each tick
-    carrying-capacity    ;; the number of turtles that can be in the world at one time
-    young-age            ;; (нове) межа "дитячого" віку, тижні
-    old-age              ;; (нове) межа "літнього" віку, тижні
-    disease-deaths ]     ;; (нове) кількість смертей від хвороби
+breed [rays ray]     ;; packets of sunlight
+breed [IRs IR]       ;; packets of infrared radiation
+breed [heats heat]   ;; packets of heat energy
+breed [CO2s CO2]     ;; packets of carbon dioxide
 
-;; The setup is divided into four procedures
+breed [clouds cloud]
+clouds-own [cloud-speed cloud-id]
+
+;;
+;; Setup Procedures
+;;
+
 to setup
   clear-all
-  setup-constants
-  setup-turtles
-  update-global-variables
-  update-display
+  set-default-shape rays "ray"
+  set-default-shape IRs "ray"
+  set-default-shape clouds "cloud"
+  set-default-shape heats "dot"
+  set-default-shape CO2s "CO2-molecule"
+  setup-world
+  repeat initial-clouds [ add-cloud ]
+  set temperature 12
   reset-ticks
 end
 
-;; We create a variable number of turtles of which 10 are infectious,
-;; and distribute them randomly
-to setup-turtles
-  create-turtles number-people
-    [ setxy random-xcor random-ycor
-      set age random lifespan
-      set sick-time 0
-      set remaining-immunity 0
-      set size 1.5  ;; easier to see
-      get-healthy ]
-  ask n-of 10 turtles
-    [ get-sick ]
+to setup-world
+  set sky-top max-pycor - 5
+  set earth-top 0
+  ask patches [  ;; set colors for the different sections of the world
+    if pycor > sky-top [  ;; space
+      set pcolor scale-color white pycor 22 15
+    ]
+    if pycor <= sky-top and pycor > earth-top [ ;; sky
+      set pcolor scale-color blue pycor -20 20
+    ]
+    if pycor < earth-top
+      [ set pcolor red + 3 ] ;; earth
+    if pycor = earth-top ;; earth surface
+      [ update-albedo ]
+  ]
 end
 
-to get-sick ;; turtle procedure
-  set sick? true
-  set remaining-immunity 0
-end
-
-to get-healthy ;; turtle procedure
-  set sick? false
-  set remaining-immunity 0
-  set sick-time 0
-end
-
-to become-immune ;; turtle procedure
-  set sick? false
-  set sick-time 0
-  set remaining-immunity immunity-duration   ;; тепер це слайдер
-end
-
-;; This sets up basic constants of the model.
-to setup-constants
-  set lifespan 50 * 52      ;; 50 times 52 weeks = 50 years = 2600 weeks old
-  set carrying-capacity 300
-  set chance-reproduce 1
-  set young-age 10 * 52     ;; (нове)
-  set old-age 35 * 52       ;; (нове)
-end
+;;
+;; Runtime Procedures
+;;
 
 to go
-  ask turtles [
-    get-older
-    move
-    if sick? [ recover-or-die ]
-    ifelse sick? [ infect ] [ reproduce ]
-  ]
-  update-global-variables
-  update-display
+  ask clouds [ fd cloud-speed ]  ; move clouds along
+  run-sunshine   ;; step sunshine
+  ;; if the albedo slider has moved update the color of the "earth surface" patches
+  ask patches with [pycor = earth-top]
+    [ update-albedo ]
+  run-heat  ;; step heat
+  run-IR    ;; step IR
+  run-CO2   ;; moves CO2 molecules
   tick
 end
 
-to update-global-variables
-  if count turtles > 0
-    [ set %infected (count turtles with [ sick? ] / count turtles) * 100
-      set %immune (count turtles with [ immune? ] / count turtles) * 100 ]
+to update-albedo ;; patch procedure
+  set pcolor scale-color green albedo 0 1
 end
 
-to update-display
-  ask turtles
-    [ if shape != turtle-shape [ set shape turtle-shape ]
-      set color ifelse-value sick? [ red ] [ ifelse-value immune? [ grey ] [ green ] ] ]
+to add-cloud            ;; erase clouds and then create new ones, plus one
+  let sky-height sky-top - earth-top
+  ;; find a random altitude for the clouds but
+  ;; make sure to keep it in the sky area
+  let y earth-top + (random-float (sky-height - 4)) + 2
+  ;; no clouds should have speed 0
+  let speed (random-float 0.1) + 0.01
+  let x random-xcor
+  let id 0
+  ;; we don't care what the cloud-id is as long as
+  ;; all the turtles in this cluster have the same
+  ;; id and it is unique among cloud clusters
+  if any? clouds
+  [ set id max [cloud-id] of clouds + 1 ]
+
+  create-clouds 3 + random 20
+  [
+    set cloud-speed speed
+    set cloud-id id
+    ;; all the cloud turtles in each larger cloud should
+    ;; be nearby but not directly on top of the others so
+    ;; add a little wiggle room in the x and ycors
+    setxy x + random 9 - 4
+          ;; the clouds should generally be clustered around the
+          ;; center with occasional larger variations
+          y + 2.5 + random-float 2 - random-float 2
+    set color white
+    ;; varying size is also purely for visualization
+    ;; since we're only doing patch-based collisions
+    set size 2 + random 2
+    set heading 90
+  ]
 end
 
-;;Turtle counting variables are advanced.
-to get-older ;; turtle procedure
-  set age age + 1
-  if age > lifespan [ die ]
-  if immune? [ set remaining-immunity remaining-immunity - 1 ]
-  if sick? [ set sick-time sick-time + 1 ]
+to remove-cloud       ;; erase clouds and then create new ones, minus one
+  if any? clouds [
+    let doomed-id one-of remove-duplicates [cloud-id] of clouds
+    ask clouds with [cloud-id = doomed-id]
+      [ die ]
+  ]
 end
 
-;; Turtles move about at random.
-to move ;; turtle procedure
-  rt random 100
-  lt random 100
-  fd 1
+to run-sunshine
+  ask rays [
+    if not can-move? 0.3 [ die ]  ;; kill them off at the edge
+    fd 0.3                        ;; otherwise keep moving
+  ]
+  create-sunshine  ;; start new sun rays from top
+  reflect-rays-from-clouds  ;; check for reflection off clouds
+  encounter-earth   ;; check for reflection off earth and absorption
 end
 
-;; (змінено) Хворий заражає тих, хто на тій самій клітинці.
-;; Імовірність залежить від віку цілі. Імунні заражаються лише з імовірністю reinfection-chance.
-to infect ;; turtle procedure
-  ask other turtles-here with [ not sick? ] [
-    if random-float 100 < infectiousness * age-infection-factor [
-      ifelse immune?
-        [ if random-float 100 < reinfection-chance [ get-sick ] ]
-        [ get-sick ]
+to create-sunshine
+  let phase (ticks mod day-length) / day-length
+  let chance 10 * sun-brightness
+  let ray-angle 160
+  let ray-x (random 10) + min-pxcor
+  if sun-moves? [
+    set ray-angle 120 + 120 * phase
+    set chance chance * (sin (phase * 180)) * 1.57
+    set ray-x min-pxcor + phase * (world-width - 10) + random 10
+  ]
+  set sun-angle ray-angle
+  if chance > random 50 [
+    create-rays 1 [
+      set heading ray-angle
+      set color yellow
+      setxy ray-x max-pycor
     ]
   ]
 end
 
-;; (змінено) Імовірність одужання залежить від віку, смерть від хвороби рахується.
-to recover-or-die ;; turtle procedure
-  if sick-time > duration
-    [ ifelse random-float 100 < chance-recover * age-recovery-factor
-      [ become-immune ]
-      [ set disease-deaths disease-deaths + 1
-        die ] ]
+to reflect-rays-from-clouds
+ ask rays with [any? clouds-here] [   ;; if ray shares patch with a cloud
+   set heading 180 - heading   ;; turn the ray around
+ ]
 end
 
-;; (змінено) Імовірність народження падає зі зростанням %infected.
-to reproduce
-  let p chance-reproduce * (1 - (spread-effect / 100) * (%infected / 100))
-  if count turtles < carrying-capacity and random-float 100 < p
-    [ hatch 1
-      [ set age 1
-        lt 45 fd 1
-        get-healthy ] ]
+to encounter-earth
+  ask rays with [ycor <= earth-top] [
+    ;; depending on the albedo either
+    ;; the earth absorbs the heat or reflects it
+    ifelse 100 * albedo > random 100
+      [ set heading 180 - heading  ] ;; reflect
+      [ rt random 45 - random 45 ;; absorb into the earth
+        set color red - 2 + random 4
+        set breed heats ]
+  ]
 end
 
-;; (нове) Коефіцієнти впливу віку
-to-report age-infection-factor ;; turtle reporter
-  if not age-effect? [ report 1 ]
-  if age < young-age [ report 1.2 ]
-  if age > old-age [ report 1.5 ]
-  report 1
+to run-heat    ;; advances the heat energy turtles
+  ;; the temperature is related to the number of heat turtles
+  set temperature 0.99 * temperature + 0.01 * (12 + 0.1 * count heats)
+  ask heats
+  [
+    let dist 0.5 * random-float 1
+    ifelse can-move? dist
+      [ fd dist ]
+      [ set heading 180 - heading ] ;; if we're hitting the edge of the world, turn around
+    if ycor >= earth-top [  ;; if heading back into sky
+      ifelse temperature > 20 + random 40
+              ;; heats only seep out of the earth from a small area
+              ;; this makes the model look nice but it also contributes
+              ;; to the rate at which heat can be lost
+              and xcor > 0 and xcor < max-pxcor - 8
+        [ set breed IRs                    ;; let some escape as IR
+          set heading 20
+          set color magenta ]
+        [ set heading 100 + random 160 ] ;; return them to earth
+    ]
+  ]
 end
 
-to-report age-recovery-factor ;; turtle reporter
-  if not age-effect? [ report 1 ]
-  if age < young-age [ report 0.9 ]
-  if age > old-age [ report 0.6 ]
-  report 1
+to run-IR
+  ask IRs [
+    if not can-move? 0.3 [ die ]
+    fd 0.3
+    if ycor <= earth-top [   ;; convert to heat if we hit the earth's surface again
+      set breed heats
+      rt random 45
+      lt random 45
+      set color red - 2 + random 4
+    ]
+    if any? CO2s-here    ;; check for collision with CO2
+      [ set heading 180 - heading ]
+  ]
 end
 
-to-report immune?
-  report remaining-immunity > 0
+to add-CO2  ;; randomly adds 25 CO2 molecules to atmosphere
+  let sky-height sky-top - earth-top
+  create-CO2s 25 [
+    set color green
+    ;; pick a random position in the sky area
+    setxy random-xcor
+          earth-top + random-float sky-height
+  ]
 end
 
-to startup
-  setup-constants ;; so that carrying-capacity can be used as upper bound of number-people slider
+to remove-CO2 ;; randomly remove 25 CO2 molecules
+  repeat 25 [
+    if any? CO2s [
+      ask one-of CO2s [ die ]
+    ]
+  ]
+end
+
+to run-CO2
+  ask CO2s [
+    rt random 51 - 25 ;; turn a bit
+    let dist 0.05 + random-float 0.1
+    ;; keep the CO2 in the sky area
+    if [not shade-of? blue pcolor] of patch-ahead dist
+      [ set heading 180 - heading ]
+    fd dist ;; move forward a bit
+  ]
 end
 
 
-; Copyright 1998 Uri Wilensky.
+; Copyright 2007 Uri Wilensky.
 ; See Info tab for full copyright and license.]]></code>
   <widgets>
-    <view x="265" wrappingAllowedX="true" y="10" frameRate="30.0" minPycor="-17" height="494" showTickCounter="true" patchSize="14.0" fontSize="10" wrappingAllowedY="true" width="494" tickCounterLabel="ticks" maxPycor="17" updateMode="1" maxPxcor="17" minPxcor="-17"></view>
-    <button x="52" y="65" height="40" disableUntilTicks="false" forever="false" kind="Observer" width="80">setup</button>
-    <button x="138" y="65" height="40" disableUntilTicks="true" forever="true" kind="Observer" width="80">go</button>
-    <slider x="5" step="1" y="10" max="carrying-capacity" width="250" display="number-people" height="50" min="10" direction="Horizontal" default="150.0" variable="number-people"></slider>
-    <chooser x="5" y="277" height="60" variable="turtle-shape" current="0" width="250" display="turtle-shape">
-      <choice type="string" value="person"></choice>
-      <choice type="string" value="circle"></choice>
-    </chooser>
-    <slider x="5" step="1.0" y="169" max="99.0" width="250" display="chance-recover" height="50" min="0.0" direction="Horizontal" default="75.0" variable="chance-recover" units="%"></slider>
-    <slider x="5" step="1.0" y="223" max="99.0" width="250" display="duration" height="50" min="0.0" direction="Horizontal" default="20.0" variable="duration" units="weeks"></slider>
-    <slider x="5" step="1.0" y="115" max="99.0" width="250" display="infectiousness" height="50" min="0.0" direction="Horizontal" default="80.0" variable="infectiousness" units="%"></slider>
-    <monitor x="763" precision="1" y="13" height="60" fontSize="11" width="100">%infected</monitor>
-    <monitor x="865" precision="1" y="13" height="60" fontSize="11" width="100">%immune</monitor>
-    <monitor x="967" precision="1" y="14" height="60" fontSize="11" width="100" display="years">ticks / 52</monitor>
-    <plot x="765" autoPlotX="true" yMax="200.0" autoPlotY="true" yAxis="people" y="80" xMin="0.0" height="245" legend="true" xMax="52.0" yMin="0.0" width="300" xAxis="weeks" display="Populations">
+    <view x="335" wrappingAllowedX="true" y="7" frameRate="30.0" minPycor="-8" height="345" showTickCounter="true" patchSize="11.0" fontSize="10" wrappingAllowedY="false" width="543" tickCounterLabel="ticks" maxPycor="22" updateMode="1" maxPxcor="24" minPxcor="-24"></view>
+    <button x="5" y="7" height="50" disableUntilTicks="false" forever="false" kind="Observer" width="100" display="setup">setup</button>
+    <button x="110" y="7" height="50" disableUntilTicks="true" forever="true" kind="Observer" width="95" display="go">go</button>
+    <slider x="5" step="0.2" y="60" max="5" width="200" display="sun-brightness" height="50" min="0" direction="Horizontal" default="1.0" variable="sun-brightness"></slider>
+    <slider x="5" step="0.05" y="115" max="1" width="200" display="albedo" height="50" min="0" direction="Horizontal" default="0.2" variable="albedo"></slider>
+    <button x="5" y="169" height="35" disableUntilTicks="true" forever="false" kind="Observer" width="95" display="add cloud">add-cloud</button>
+    <button x="110" y="169" height="35" disableUntilTicks="true" forever="false" kind="Observer" width="95" display="remove cloud">remove-cloud</button>
+    <button x="110" y="210" height="35" disableUntilTicks="true" forever="false" kind="Observer" width="95" display="remove CO2">remove-CO2</button>
+    <button x="5" y="210" height="35" disableUntilTicks="true" forever="false" kind="Observer" width="95" display="add CO2">add-CO2</button>
+    <button x="225" y="40" height="35" disableUntilTicks="true" forever="false" kind="Observer" width="101" display="watch a ray">watch one-of rays
+ask subject [ pen-down ]</button>
+    <monitor x="225" precision="1" y="80" height="60" fontSize="11" width="100">temperature</monitor>
+    <monitor x="225" precision="2" y="145" height="60" fontSize="11" width="100" display="CO2 amount">count CO2s</monitor>
+    <plot x="10" autoPlotX="true" yMax="20.0" autoPlotY="true" y="250" xMin="0.0" height="211" legend="false" xMax="10.0" yMin="10.0" width="315" display="Global Temperature">
       <setup></setup>
       <update></update>
-      <pen interval="1.0" mode="0" display="sick" color="-2674135" legend="true">
+      <pen interval="1.0" mode="0" display="default" color="-2674135" legend="true">
         <setup></setup>
-        <update>plot count turtles with [ sick? ]</update>
-      </pen>
-      <pen interval="1.0" mode="0" display="immune" color="-7500403" legend="true">
-        <setup></setup>
-        <update>plot count turtles with [ immune? ]</update>
-      </pen>
-      <pen interval="1.0" mode="0" display="healthy" color="-10899396" legend="true">
-        <setup></setup>
-        <update>plot count turtles with [ not sick? and not immune? ]</update>
-      </pen>
-      <pen interval="1.0" mode="0" display="total" color="-13345367" legend="true">
-        <setup></setup>
-        <update>plot count turtles</update>
+        <update>plot temperature</update>
       </pen>
     </plot>
-    <switch x="15" y="350" height="40" on="true" variable="age-effect?" width="90" display="age-effect?"></switch>
-    <slider x="5" step="1" y="400" max="100" width="250" display="spread-effect" height="50" min="0" direction="Horizontal" default="0.0" variable="spread-effect" units="%"></slider>
-    <slider x="5" step="1" y="460" max="260" width="250" display="immunity-duration" height="50" min="0" direction="Horizontal" default="52.0" variable="immunity-duration" units="weeks"></slider>
-    <slider x="765" step="1" y="340" max="100" width="250" display="reinfection-chance" height="50" min="0" direction="Horizontal" default="0.0" variable="reinfection-chance" units="%"></slider>
-    <monitor x="770" precision="0" y="405" height="60" fontSize="11" width="100" display="disease-deaths">disease-deaths</monitor>
+    <slider x="335" step="1" y="360" max="10" width="250" display="initial-clouds" height="50" min="0" direction="Horizontal" default="0.0" variable="initial-clouds" units="clouds"></slider>
+    <slider x="600" step="50" y="360" max="2000" width="250" display="day-length" height="50" min="100" direction="Horizontal" default="500.0" variable="day-length" units="ticks"></slider>
+    <switch x="335" y="420" height="40" on="false" variable="sun-moves?" width="100" display="sun-moves?"></switch>
+    <monitor x="450" precision="0" y="415" height="60" fontSize="11" width="100" display="sun-angle">sun-angle</monitor>
   </widgets>
   <info><![CDATA[## WHAT IS IT?
 
-This model simulates the transmission and perpetuation of a virus in a human population.
-
-Ecological biologists have suggested a number of factors which may influence the survival of a directly transmitted virus within a population. (Yorke, et al. "Seasonality and the requirements for perpetuation and eradication of viruses in populations." Journal of Epidemiology, volume 109, pages 103-123)
+This is a model of energy flow in the earth, particularly heat energy. It shows the earth as rose colored, and the surface of the planet is represented by a black strip. Above the strip there is a blue atmosphere and black space at the top. Clouds and carbon dioxide (CO2) molecules can be added to the atmosphere. The CO2 molecules represent greenhouse gases that block infrared light that is emitted by the earth. Clouds block incoming or outgoing sun rays, influencing the heating up or cooling down of the planet.
 
 ## HOW IT WORKS
 
-The model is initialized with 150 people, of which 10 are infected.  People move randomly about the world in one of three states: healthy but susceptible to infection (green), sick and infectious (red), and healthy and immune (gray). People may die of infection or old age.  When the population dips below the environment's "carrying capacity" (set at 300 in this model) healthy people may produce healthy (but susceptible) offspring.
+Yellow arrowheads stream downward representing sunlight energy. Some of the sunlight reflects off clouds and more can reflect off the earth's surface.
 
-Some of these factors are summarized below with an explanation of how each one is treated in this model.
+If sunlight is absorbed by the earth, it turns into a red dot, representing heat energy. Each dot represents the energy of one yellow sunlight arrowhead. The red dots randomly move around the earth, and its temperature is related to the total number of red dots.
 
-### The density of the population
+Sometimes the red dots transform themselves into infrared (IR) light that heads toward space, carrying off energy. The probability of a red dot becoming IR light depends on the earth's temperature. When the earth is cold, few red dots generate IR light; when it is hot, most do. The IR energy is represented by a magenta arrowhead. Each carries the same energy as a yellow arrowhead and as a red dot. The IR light goes through clouds but can bounce off CO2 molecules.
 
-Population density affects how often infected, immune and susceptible individuals come into contact with each other. You can change the size of the initial population through the NUMBER-PEOPLE slider.
+There is a relation between the number of red dots in the earth and the temperature of the earth. This is because the earth temperature goes up as the total thermal energy is increased. Thermal energy is added by sunlight that reaches the earth as well as from infrared (IR) light reflected down to the earth. Thermal energy is removed by IR emitted by the earth. The balance of these determines the energy in the earth, which is proportional to its temperature.
 
-### Population turnover
-
-As individuals die, some who die will be infected, some will be susceptible and some will be immune.  All the new individuals who are born, replacing those who die, will be susceptible.  People may die from the virus, the chances of which are determined by the slider CHANCE-RECOVER, or they may die of old age.
-
-In this model, people die of old age at the age of 50 years.  Reproduction rate is constant in this model.  Each turn, if the carrying capacity hasn't been reached, every healthy individual has a 1% chance to reproduce.
-
-### Degree of immunity
-
-If a person has been infected and recovered, how immune are they to the virus?  We often assume that immunity lasts a lifetime and is assured, but in some cases immunity wears off in time and immunity might not be absolutely secure.  In this model, immunity is secure, but it only lasts for a year.
-
-### Infectiousness (or transmissibility)
-
-How easily does the virus spread?  Some viruses with which we are familiar spread very easily.  Some viruses spread from the smallest contact every time.  Others (the HIV virus, which is responsible for AIDS, for example) require significant contact, perhaps many times, before the virus is transmitted.  In this model, infectiousness is determined by the INFECTIOUSNESS slider.
-
-### Duration of infectiousness
-
-How long is a person infected before they either recover or die?  This length of time is essentially the virus's window of opportunity for transmission to new hosts. In this model, duration of infectiousness is determined by the DURATION slider.
-
-### Hard-coded parameters
-
-Four important parameters of this model are set as constants in the code (See `setup-constants` procedure). They can be exposed as sliders if desired. The turtles’ lifespan is set to 50 years, the carrying capacity of the world is set to 300, the duration of immunity is set to 52 weeks, and the birth-rate is set to a 1 in 100 chance of reproducing per tick when the number of people is less than the carrying capacity.
+There are, of course, many simplifications in this model. The earth is not a single temperature, does not have a single albedo, and does not have a single heat capacity. Visible light is somewhat absorbed by CO2 and some IR light does bounce off clouds. No model is completely accurate. What is important is that a model reacts in some ways like the system it is supposed to model. This model does that, showing how the greenhouse effect is caused by CO2 and other gases that absorb IR.
 
 ## HOW TO USE IT
 
-Each "tick" represents a week in the time scale of this model.
+The SUN-BRIGHTNESS slider controls how much sun energy enters the earth's atmosphere. A value of 1.0 corresponds to our sun. Higher values allow you to see what would happen if the earth was closer to the sun, or if the sun got brighter.
 
-The INFECTIOUSNESS slider determines how great the chance is that virus transmission will occur when an infected person and susceptible person occupy the same patch.  For instance, when the slider is set to 50, the virus will spread roughly once every two chance encounters.
+The ALBEDO slider controls how much of the sun energy hitting the earth is absorbed.
+If the albedo is 1.0, the earth reflects all sunlight. This could happen if the earth froze, and it is indicated by a white surface. If the albedo is zero, the earth absorbs all sunlight. This is indicated as a black surface. The earth's albedo is about 0.6.
 
-The DURATION slider determines the number of weeks before an infected person either dies or recovers.
+You can add and remove clouds with buttons. Clouds block sunlight but not IR.
 
-The CHANCE-RECOVER slider controls the likelihood that an infection will end in recovery/immunity.  When this slider is set at zero, for instance, the infection is always deadly.
+You can add and remove greenhouse gases, represented as CO2 molecules. CO2 blocks IR light but not sunlight. The buttons add and subtract molecules in groups of 25 up to 150.
 
-The SETUP button resets the graphics and plots and randomly distributes NUMBER-PEOPLE in the view. All but 10 of the people are set to be green susceptible people and 10 red infected people (of randomly distributed ages).  The GO button starts the simulation and the plotting function.
-
-The TURTLE-SHAPE chooser controls whether the people are visualized as person shapes or as circles.
-
-Three output monitors show the percent of the population that is infected, the percent that is immune, and the number of years that have passed.  The plot shows (in their respective colors) the number of susceptible, infected, and immune people.  It also shows the number of individuals in the total population in blue.
+The temperature of the earth is related to the amount of heat in the earth. The more red dots you see, the hotter it is.
 
 ## THINGS TO NOTICE
 
-The factors controlled by the three sliders interact to influence how likely the virus is to thrive in this population.  Notice that in all cases, these factors must create a balance in which an adequate number of potential hosts remain available to the virus and in which the virus can adequately access those hosts.
+Watch a single sunlight arrowhead. This is easier if you slow down the model using the slider at the top of the model.  You can also use the WATCH A RAY button.
 
-Often there will initially be an explosion of infection since no one in the population is immune.  This approximates the initial "outbreak" of a viral infection in a population, one that often has devastating consequences for the humans concerned. Soon, however, the virus becomes less common as the population dynamics change.  What ultimately happens to the virus is determined by the factors controlled by the sliders.
-
-Notice that viruses that are too successful at first (infecting almost everyone) may not survive in the long term.  Since everyone infected generally dies or becomes immune as a result, the potential number of hosts is often limited.  The exception to the above is when the DURATION slider is set so high that population turnover (reproduction) can keep up and provide new hosts.
+What happens to the arrowhead when it hits the earth? Describe its later path. Does it escape the earth? What happens then? Do all arrowheads follow similar paths?
 
 ## THINGS TO TRY
 
-Think about how different slider values might approximate the dynamics of real-life viruses.  The famous Ebola virus in central Africa has a very short duration, a very high infectiousness value, and an extremely low recovery rate. For all the fear this virus has raised, how successful is it?  Set the sliders appropriately and watch what happens.
+1. Play with the model. Change the albedo and run the model. Add clouds and CO2 to the model and then watch a single sunlight arrowhead. What is the highest earth temperature you can produce?
 
-The HIV virus, which causes AIDS, has an extremely long duration, an extremely low recovery rate, but an extremely low infectiousness value.  How does a virus with these slider values fare in this model?
+2. Run the model with a bright sun but no clouds and no CO2. What happens to the temperature? It should rise quickly and then settle down around 37 degrees. Why does it stop rising? Why does the temperature continue to bounce around? Remember, the temperature reflects the number of red dots in the earth. When the temperature is constant, there are about as many incoming yellow arrowheads as outgoing IR ones. Why?
+
+3. Explore the effect of albedo holding everything else constant. Does increasing the albedo increase or decrease the earth temperature? When you experiment, be sure to run the model long enough for the temperature to settle down.
+
+4. Explore the effect of clouds holding everything else constant.
+
+5. Explore the effect of adding 100 CO2 molecules. What is the cause of the change you observe? Follow one sunlight arrowhead now.
 
 ## EXTENDING THE MODEL
 
-Add additional sliders controlling the carrying capacity of the world (how many people can be in the world at one time), the average lifespan of the people and their birth-rate.
+Try to add some other factors influencing the earth's temperature. For example, you could add patches of vegetation and then see what happens as they are consumed for human occupation. Also, you could try to add variable albedo to the model, instead of having one value for the whole planet. You could have glaciers with high albedo, and seas with low albedo, and then evaluate what happens when the glaciers melt into the seas.
 
-Build a similar model simulating viral infection of a non-human host with very different reproductive rates, lifespans, and population densities.
+## NETLOGO FEATURES
 
-Add a slider controlling how long immunity lasts. You could also make immunity imperfect, so that immune turtles still have a small chance of getting infected. This chance could get higher over time.
-
-## VISUALIZATION
-
-The circle visualization of the model comes from guidelines presented in
-Kornhauser, D., Wilensky, U., & Rand, W. (2009). http://ccl.northwestern.edu/papers/2009/Kornhauser,Wilensky&Rand_DesignGuidelinesABMViz.pdf.
-
-At the lowest level, perceptual impediments arise when we exceed the limitations of our low-level visual system. Visual features that are difficult to distinguish can disable our pre-attentive processing capabilities. Pre-attentive processing can be hindered by other cognitive phenomena such as interference between visual features (Healey 2006).
-
-The circle visualization in this model is supposed to make it easier to see when agents interact because overlap is easier to see between circles than between the "people" shapes. In the circle visualization, the circles merge to create new compound shapes. Thus, it is easier to perceive new compound shapes in the circle visualization.
-Does the circle visualization make it easier for you to see what is happening?
+Note that clouds are actually made up of lots of small circular turtles.
 
 ## RELATED MODELS
 
-* HIV
-* Virus on a Network
+Daisyworld
 
 ## CREDITS AND REFERENCES
 
-This model can show an alternate visualization of the Virus model using circles to represent the people. It uses visualization techniques as recommended in the paper:
-
-Kornhauser, D., Wilensky, U., & Rand, W. (2009). Design guidelines for agent based model visualization. Journal of Artificial Societies and Social Simulation, JASSS, 12(2), 1.
+This model is based on an earlier version created in 2005 by Robert Tinker for the TELS project.
 
 ## HOW TO CITE
 
@@ -306,7 +325,7 @@ If you mention this model or the NetLogo software in a publication, we ask that 
 
 For the model itself:
 
-* Wilensky, U. (1998).  NetLogo Virus model.  http://ccl.northwestern.edu/netlogo/models/Virus.  Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.
+* Tinker, R. and Wilensky, U. (2007).  NetLogo Climate Change model.  http://ccl.northwestern.edu/netlogo/models/ClimateChange.  Center for Connected Learning and Computer-Based Modeling, Northwestern University, Evanston, IL.
 
 Please cite the NetLogo software as:
 
@@ -314,7 +333,7 @@ Please cite the NetLogo software as:
 
 ## COPYRIGHT AND LICENSE
 
-Copyright 1998 Uri Wilensky.
+Copyright 2007 Uri Wilensky.
 
 ![CC BY-NC-SA 3.0](http://ccl.northwestern.edu/images/creativecommons/byncsa.png)
 
@@ -324,11 +343,7 @@ NetLogo itself is free software for non-commercial use under the terms of the GN
 
 To inquire about commercial licenses for either NetLogo or specific models from the models library, please contact netlogo-commercial-admin@ccl.northwestern.edu.
 
-This model was created as part of the project: CONNECTED MATHEMATICS: MAKING SENSE OF COMPLEX PHENOMENA THROUGH BUILDING OBJECT-BASED PARALLEL MODELS (OBPML).  The project gratefully acknowledges the support of the National Science Foundation (Applications of Advanced Technologies Program) -- grant numbers RED #9552950 and REC #9632612.
-
-This model was converted to NetLogo as part of the projects: PARTICIPATORY SIMULATIONS: NETWORK-BASED DESIGN FOR SYSTEMS LEARNING IN CLASSROOMS and/or INTEGRATED SIMULATION AND MODELING ENVIRONMENT. The project gratefully acknowledges the support of the National Science Foundation (REPP & ROLE programs) -- grant numbers REC #9814682 and REC-0126227. Converted from StarLogoT to NetLogo, 2001.
-
-<!-- 1998 2001 -->]]></info>
+<!-- 2007 Cite: Tinker, R. -->]]></info>
   <turtleShapes>
     <shape name="default" rotatable="true" editableColorIndex="0">
       <polygon color="-1920102913" filled="true" marked="true">
@@ -499,6 +514,21 @@ This model was converted to NetLogo as part of the projects: PARTICIPATORY SIMUL
     <shape name="circle 2" rotatable="false" editableColorIndex="0">
       <circle x="0" y="0" marked="true" color="-1920102913" diameter="300" filled="true"></circle>
       <circle x="30" y="30" marked="false" color="255" diameter="240" filled="true"></circle>
+    </shape>
+    <shape name="cloud" rotatable="false" editableColorIndex="0">
+      <circle x="13" y="118" marked="true" color="-1920102913" diameter="94" filled="true"></circle>
+      <circle x="86" y="101" marked="true" color="-1920102913" diameter="127" filled="true"></circle>
+      <circle x="51" y="51" marked="true" color="-1920102913" diameter="108" filled="true"></circle>
+      <circle x="118" y="43" marked="true" color="-1920102913" diameter="95" filled="true"></circle>
+      <circle x="158" y="68" marked="true" color="-1920102913" diameter="134" filled="true"></circle>
+    </shape>
+    <shape name="co2-molecule" rotatable="true" editableColorIndex="0">
+      <circle x="183" y="63" marked="false" color="-1" diameter="84" filled="true"></circle>
+      <circle x="183" y="63" marked="false" color="255" diameter="84" filled="false"></circle>
+      <circle x="75" y="75" marked="true" color="-1920102913" diameter="150" filled="true"></circle>
+      <circle x="75" y="75" marked="false" color="255" diameter="150" filled="false"></circle>
+      <circle x="33" y="63" marked="false" color="-1" diameter="84" filled="true"></circle>
+      <circle x="33" y="63" marked="false" color="255" diameter="84" filled="false"></circle>
     </shape>
     <shape name="cow" rotatable="false" editableColorIndex="0">
       <polygon color="-1920102913" filled="true" marked="true">
@@ -755,6 +785,14 @@ This model was converted to NetLogo as part of the projects: PARTICIPATORY SIMUL
     <shape name="line half" rotatable="true" editableColorIndex="0">
       <line endX="150" startY="0" marked="true" color="-1920102913" endY="150" startX="150"></line>
     </shape>
+    <shape name="molecule water" rotatable="true" editableColorIndex="0">
+      <circle x="183" y="63" marked="false" color="-1" diameter="84" filled="true"></circle>
+      <circle x="183" y="63" marked="false" color="255" diameter="84" filled="false"></circle>
+      <circle x="75" y="75" marked="true" color="-1920102913" diameter="150" filled="true"></circle>
+      <circle x="75" y="75" marked="false" color="255" diameter="150" filled="false"></circle>
+      <circle x="33" y="63" marked="false" color="-1" diameter="84" filled="true"></circle>
+      <circle x="33" y="63" marked="false" color="255" diameter="84" filled="false"></circle>
+    </shape>
     <shape name="pentagon" rotatable="false" editableColorIndex="0">
       <polygon color="-1920102913" filled="true" marked="true">
         <point x="150" y="15"></point>
@@ -844,6 +882,15 @@ This model was converted to NetLogo as part of the projects: PARTICIPATORY SIMUL
         <point x="180" y="45"></point>
         <point x="165" y="90"></point>
       </polygon>
+    </shape>
+    <shape name="ray" rotatable="true" editableColorIndex="0">
+      <line endX="150" startY="0" marked="true" color="-1920102913" endY="315" startX="150"></line>
+      <line endX="150" startY="255" marked="true" color="-1920102913" endY="225" startX="120"></line>
+      <line endX="180" startY="225" marked="true" color="-1920102913" endY="255" startX="150"></line>
+      <line endX="150" startY="165" marked="true" color="-1920102913" endY="135" startX="120"></line>
+      <line endX="150" startY="75" marked="true" color="-1920102913" endY="45" startX="120"></line>
+      <line endX="180" startY="135" marked="true" color="-1920102913" endY="165" startX="150"></line>
+      <line endX="180" startY="45" marked="true" color="-1920102913" endY="75" startX="150"></line>
     </shape>
     <shape name="square" rotatable="false" editableColorIndex="0">
       <rectangle endX="270" startY="30" marked="true" color="-1920102913" endY="270" startX="30" filled="true"></rectangle>
@@ -1038,5 +1085,5 @@ This model was converted to NetLogo as part of the projects: PARTICIPATORY SIMUL
       </indicator>
     </shape>
   </linkShapes>
-  <previewCommands>setup repeat 75 [ go ]</previewCommands>
+  <previewCommands>setup add-cloud add-cloud add-cloud repeat 800 [ go ]</previewCommands>
 </model>
