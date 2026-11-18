@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="us-ascii"?>
+<!DOCTYPE search SYSTEM "behaviorsearch.dtd">
+<search>
+    <bsearchVersionNumber>1.10</bsearchVersionNumber>
+    <modelInfo>
+        <modelFile>/Users/viacheslav/Desktop/Study/&#1057;&#1077;&#1084;&#1077;&#1089;&#1090;&#1088; 11/&#1050;&#1057;&#1030;&#1052;/&#1051;&#1088;2_v.2/Climate_lab2.nlogox</modelFile>
+        <modelSetupCommands>setup</modelSetupCommands>
+        <modelStepCommands>go</modelStepCommands>
+        <modelStopCondition>false</modelStopCondition>
+        <modelStepLimit>600</modelStepLimit>
+        <modelMetricReporter>abs (temperature - 15)</modelMetricReporter>
+        <modelMeasureIf>true</modelMeasureIf>
+    </modelInfo>
+    <fitnessInfo>
+        <fitnessMinimized>true</fitnessMinimized>
+        <fitnessCollecting>AT_FINAL_STEP</fitnessCollecting>
+        <fitnessSamplingReplications>5</fitnessSamplingReplications>
+        <fitnessCombineReplications>MEAN</fitnessCombineReplications>
+    </fitnessInfo>
+    <searchSpace>
+        <paramSpec>["sun-brightness" [0 0.2 5]]</paramSpec>
+        <paramSpec>["albedo" [0 0.05 1]]</paramSpec>
+        <paramSpec>["initial-clouds" [0 1 10]]</paramSpec>
+    </searchSpace>
+    <searchMethod type="RandomSearch"/>
+    <chromosomeRepresentation type="GrayBinaryChromosome"/>
+    <caching>true</caching>
+    <evaluationLimit>1500</evaluationLimit>
+    <bestCheckingNumReplications>0</bestCheckingNumReplications>
+</search>
